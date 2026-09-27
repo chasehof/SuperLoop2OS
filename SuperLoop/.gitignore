@@ -1,2 +1,7 @@
 build
 !.vscode/*
+
+# CPython bytecode. Never useful on the Pico -- MicroPython has no __pycache__
+# support and stale .pyc files can shadow real modules.
+__pycache__/
+*.py[cod]

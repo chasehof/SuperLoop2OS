@@ -35,8 +35,8 @@ pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(SuperLoop SuperLoop.cpp
-                         drivers/lcd_i2c.cpp )
+add_executable(SuperLoop src/cpp/SuperLoop.cpp
+                         src/cpp/drivers/lcd_i2c.cpp )
 
 pico_set_program_name(SuperLoop "SuperLoop")
 pico_set_program_version(SuperLoop "0.1")
@@ -54,9 +54,12 @@ target_link_libraries(SuperLoop
 
 # Add the standard include files to the build
 target_include_directories(SuperLoop PRIVATE
-        ${CMAKE_CURRENT_LIST_DIR}
-        ${CMAKE_CURRENT_LIST_DIR}/drivers
+    ${CMAKE_CURRENT_LIST_DIR}/src/cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/cpp/drivers
 )
 
 pico_add_extra_outputs(SuperLoop)
+
+# Also build the FreeRTOS demo as a sibling target (so it uses the same SDK/toolchain)
+add_subdirectory(freertos)
 
