@@ -1,143 +1,160 @@
-# Teaching SuperLoop: why an operating system is worth it
+# Teaching guide: the superloop problem and the scheduler fix
 
-A single demo application, written three ways, used to build the argument that
-scheduling and interrupts are not optional complexity. Each variant drives the
-same hardware: three LEDs, a potentiometer on the ADC, a servo, an I2C LCD, and
-a long message over UART.
+This project is designed to teach one thing in a way students can see:
 
-## The through-line
+- One long blocking action makes the whole microcontroller feel slow.
+- A scheduler fixes that by time-slicing work.
+- A hardware interrupt drives the schedule and makes the system responsive.
 
-Each variant adds exactly one new idea, and each idea fixes a specific,
-*observable* defect in the one before it. Do not skip a stage — the failure at
-each stage is the setup for the next.
+The main path is:
 
-| Stage | Variant | Adds | The problem it fixes |
-| --- | --- | --- | --- |
-| 1 | `python/` | nothing — a bare loop | establishes how bad it is |
-| 2 | `freertos/` | preemptive time-slicing | one slow thing no longer starves everything |
-| 3 | `freertos/` | the tick interrupt | explains *how* preemption actually happens |
+1. Python superloop = slow and visibly laggy
+2. FreeRTOS = same work, but split into tasks and scheduled
+3. Interrupt/tick = the reason the scheduler works
 
-`src/cpp/` is the same bare loop in C++. It is not part of the argument so much
-as a control: it shows the Python version is not slow because of Python, it is
-slow because of the loop.
+The C++ version is only a reference comparison. It is not the main lesson.
 
-## Stage 1 - the superloop (MicroPython)
+## Stage 1: the Python superloop is laggy
 
-Flash and run:
+Flash and run the Python build:
 
 ```bash
 ./scripts/flash_micropython.sh
 ./scripts/deploy_python.sh
 ```
 
-Read `python/superloop/main.py`. The entire program is one `while True` loop
-that does every job in sequence: blink the LEDs, read the pot, move the servo,
-update the LCD, write a long string to the UART, sleep.
+Then open the file:
 
-Ask the class: **if the UART write is slow, what stops working?**
+- `python/superloop/main.py`
 
-Then make them find the answer. The point to land: nothing stops, but nothing
-*else runs either*. `long_running_message()` writes roughly 150 characters with
-a delay per character, so for more than a second the LEDs are frozen and the
-potentiometer is not sampled. The system is not broken — it is serial, and
-serial is the bug.
+The important part is the loop:
 
-Things worth pointing out in the source:
+```python
+while True:
+    flash_leds(leds)
+    angle = update_servo_from_pot(servo, pot)
+    update_lcd_display(lcd, pot.read(), angle)
+    long_running_message(uart)
+    time.sleep_ms(1000)
+```
 
-- `time.sleep_ms()` is a *blocking* call. It parks the whole machine, not just
-  the caller. There is no other caller.
-- There is no notion of "importance". A cosmetic LED blink and a sensor read
-  occupy the same thread, so they are equally worth stalling for.
-- `hal.py` deliberately wraps every `machine` import in `try/except ImportError`.
-  That is what lets this exact package import on a desktop CPython interpreter
-  for inspection.
+That `long_running_message()` is the whole lesson.
 
-## Stage 2 - preemptive scheduling (FreeRTOS)
+It writes a long ASCII-art message over UART, one piece at a time, and it pauses between writes. During that time, the LEDs do not run, the LCD is not refreshed, and the system feels frozen.
 
-Same logic, now as a task:
+Ask the class:
+
+- What is stopping the LEDs from blinking?
+- Why does the whole board feel laggy even though the code is still running?
+
+The answer is simple: the loop is doing one long blocking action before it gets back to the next task.
+
+## Stage 2: FreeRTOS makes it responsive
+
+Build and flash the RTOS version:
 
 ```bash
-./scripts/fetch_freertos.sh   # once
+./scripts/fetch_freertos.sh
 ./scripts/deploy_freertos.sh
 ```
 
-Read `freertos/src/main.cpp`. Ask what changed.
+Then open:
 
-The answer is `vTaskDelay()` replacing `sleep_ms()`, and — this is the part that
-matters — `vTaskDelay()` *returns*. It hands the CPU back to the scheduler
-instead of sitting in a busy wait. The loop body is otherwise nearly identical.
+- `freertos/src/main.cpp`
 
-Confirm it on the board. The FreeRTOS build prints a heartbeat:
+The key change is that the work is now split into a task and yields with `vTaskDelay()` instead of blocking on a single long write.
 
-```
+This is the point to stress:
+
+- The Python version is slow because there is only one loop.
+- The FreeRTOS version is not magically faster.
+- It is simply sharing time between tasks instead of letting one task monopolize the CPU.
+
+That is why the system feels responsive again.
+
+## Stage 3: the interrupt is what keeps it real
+
+The key signal in the FreeRTOS build is the heartbeat:
+
+```text
 [tick     9360] superloop task alive and yielding
-[tick    12453] superloop task alive and yielding
 ```
 
-The tick advances at exactly `configTICK_RATE_HZ` (1000/sec). Contrast that
-with stage 1, where the only timing in the system is whatever the loop happens
-to be doing. The board now has a clock, which is the precondition for deciding
-that anything is late.
+That number is not being updated by the application code. It advances because the hardware tick interrupt fires regularly and the FreeRTOS scheduler uses it to decide when to switch tasks.
 
-## Stage 3 - the interrupt that makes it work
+This is the interrupt lesson:
 
-The heartbeat is worth dwelling on, because it is the least obvious part.
+- The scheduler is not just a loop.
+- The scheduler is run by a timer interrupt.
+- The interrupt gives the system a real timebase.
 
-Nobody called a function to make that number go up. SysTick fires 1000 times a
-second from hardware, and its handler is what advances the tick. Ask the class
-where that number is coming from, and let them find `FreeRTOSConfig.h` and the
-port's `isr_systick`.
+Without that interrupt, the system is only a loop. With it, the CPU can be shared fairly and the system becomes responsive.
 
-This is the point of the whole exercise: **preemption is not cooperative.** The
-running task cannot choose to be interrupted, and does not need to cooperate. The
-scheduler works because a hardware timer takes the CPU away on a fixed schedule,
-which is why a task that forgets to yield still cannot starve its neighbours.
+## The class script
 
-Worth noting: the heartbeat is guarded by `stdio_usb_connected()` so the task
-can never block on a full USB buffer. That guard is a scheduling concern hiding
-inside a print statement — a good prompt for "what else in this program could
-block?"
+Keep it simple:
 
-## The optional exercise that ties it together
+1. Run the Python version.
+2. Show that the UART message stalls the loop.
+3. Ask the students what is wrong with this design.
+4. Run the FreeRTOS version.
+5. Point out the scheduler and `vTaskDelay()`.
+6. Explain the interrupt tick and why the system now feels responsive.
 
-Ask: add a button on a fourth GPIO that must be sampled every 10 ms to debounce
-a switch.
+## Windows instructions for students and teacher
 
-- In stage 1 there is nowhere to put it. The only way to poll it is inside the
-  existing loop, where its latency is however long the UART message takes.
-- In stage 2 it is a second task with a short period, and it simply works —
-  because `vTaskDelay()` yields.
-- In stage 3 you can also make it a hardware interrupt or a timer callback, and
-  now the latency is bounded by the hardware rather than by the scheduler's
-  tick.
+### Flash the Python image on Windows
 
-That progression — poll badly, poll well, get interrupted — is the shape of most
-real-time firmware, and it is the argument the three variants are built to make.
-
-## Why the C++ bare-loop variant exists
-
-`src/cpp/` is the identical bare loop in native code. It is useful for exactly
-one demonstration: if students conclude that stage 1 is slow *because it is
-Python*, flashing the C++ version and watching it be equally unresponsive
-settles the question. The problem was never the language. It was the loop.
-
-## A trap to expect
-
-If students build the FreeRTOS variant and the board flashes but then vanishes
-from USB entirely, the fault is almost always the exception handlers.
-`configUSE_DYNAMIC_EXCEPTION_HANDLERS` defaults to `1`, and at that setting the
-RP2040 port does not alias `vPortSVCHandler` / `xPortPendSVHandler` /
-`xPortSysTickHandler` onto the SDK's `isr_svcall` / `isr_pendsv` /
-`isr_systick`. Nothing references them, the linker discards them, the vector
-table keeps the SDK's empty defaults, and `vTaskStartScheduler()` faults before
-any task runs. `freertos/include/FreeRTOSConfig.h` sets it to `0`; that one line
-is the difference between a working demo and a board that looks bricked.
-
-To make students see it, they can check the linked image:
-
-```bash
-arm-none-eabi-nm build/freertos/SuperLoop_FreeRTOS.elf | grep isr_sys
+```powershell
+cd SuperLoop
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+./scripts/flash_micropython.ps1
+./scripts/deploy_python.ps1
 ```
 
-Strong `T` means the scheduler will start. Weak `W` means it will not, no matter
-how convincingly the flashing appeared to work.
+If the port is not auto-detected:
+
+```powershell
+./scripts/deploy_python.ps1 -Port COM7
+```
+
+### Flash the FreeRTOS image on Windows
+
+```powershell
+cd SuperLoop
+./scripts/fetch_freertos.ps1
+./scripts/deploy_freertos.ps1
+```
+
+### Watch the UART output on Windows
+
+Connect a USB-to-UART adapter to the Pico:
+
+- GP12 -> TX
+- GP13 -> RX
+- GND -> GND
+
+Then open a serial terminal at 9600 baud, 8N1, no flow control.
+
+Common tools:
+
+- PuTTY
+- RealTerm
+- Tera Term
+- VS Code serial monitor
+
+The message will appear there, not over the USB CDC port.
+
+## The one-sentence takeaway
+
+A superloop blocks on a long write and everything feels laggy; a scheduler breaks that work into tasks so it can yield; and the interrupt gives the scheduler its clock so the system stays responsive.
+
+## Optional extension
+
+Ask the class: what happens if a button is checked every 10 ms?
+
+- In the Python superloop, the button is delayed by the same long UART write.
+- In FreeRTOS, the button task can run on time.
+- With an interrupt, the button can be handled with even tighter latency.
+
+That is exactly the progression from bare loop to scheduler to interrupt-driven real-time behavior.

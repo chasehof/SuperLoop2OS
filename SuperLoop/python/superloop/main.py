@@ -1,3 +1,14 @@
+"""SuperLoop demo in MicroPython.
+
+This version is intentionally written as a bare loop so the class can see the
+lag caused by a long serial write. The UART message is deliberately slow and
+blocking: while it runs, the LEDs, LCD, and servo updates are all paused.
+
+The point of the lesson is to watch that lag appear, then compare it with the
+FreeRTOS version where the same work is split into tasks and the scheduler
+keeps the system responsive.
+"""
+
 import time
 from .drivers.lcd_i2c import LCD_I2C
 from .hal import (
@@ -46,6 +57,10 @@ def update_lcd_display(lcd, pot_val, angle):
     lcd.write_string(f"Angle: {angle:<9.1f}")
 
 def long_running_message(uart):
+    # This is the key demonstration: the loop blocks here while the UART sends a
+    # long message. The LEDs and other work stop being serviced until the send is
+    # complete. In the RTOS version, this same work is moved off into a task so
+    # the system can keep responding.
     message = r"""
     _____________________
     < Wow what a long message!   >
